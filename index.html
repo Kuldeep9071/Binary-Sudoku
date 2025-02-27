@@ -186,6 +186,16 @@
             right: 2px;
         }
 
+        .hint {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+
         .popup {
             display: none;
             position: fixed;
@@ -380,6 +390,19 @@
         </div>
     </div>
     
+    <!-- Confirmation popup -->
+    <div id="confirm-popup" class="popup">
+        <div class="popup-content">
+            <span class="close-popup" onclick="closeConfirmPopup()">&times;</span>
+            <h2>Are you sure?</h2>
+            <p id="confirm-message">This will reveal the solution and end your current game.</p>
+            <div class="controls">
+                <button onclick="confirmAction()">Yes, show me</button>
+                <button onclick="closeConfirmPopup()">No, keep playing</button>
+            </div>
+        </div>
+    </div>
+    
     <!-- Winner popup -->
     <div id="winner-popup" class="popup">
         <div class="popup-content winner">
@@ -396,27 +419,51 @@
         let seconds = 0;
         let currentSize = 4;
         let gameStarted = false;
+        let currentSolution = [];
+        let currentPrefilled = [];
+        let confirmCallback = null;
 
         // Show rules popup
         function showRules() {
             document.getElementById("rules-popup").style.display = "flex";
         }
-        
+
         // Close rules popup
         function closeRulesPopup() {
             document.getElementById("rules-popup").style.display = "none";
         }
-        
+
         // Show size selection popup
         function showSizePopup() {
             document.getElementById("size-popup").style.display = "flex";
         }
-        
+
         // Close size selection popup
         function closeSizePopup() {
             document.getElementById("size-popup").style.display = "none";
         }
-        
+
+        // Show confirmation popup
+        function showConfirmPopup(message, callback) {
+            document.getElementById("confirm-message").innerText = message;
+            document.getElementById("confirm-popup").style.display = "flex";
+            confirmCallback = callback;
+        }
+
+        // Close confirmation popup
+        function closeConfirmPopup() {
+            document.getElementById("confirm-popup").style.display = "none";
+            confirmCallback = null;
+        }
+
+        // Execute confirmed action
+        function confirmAction() {
+            closeConfirmPopup();
+            if (confirmCallback) {
+                confirmCallback();
+            }
+        }
+
         // Start game with selected size
         function startGameWithSize(size) {
             currentSize = size;
@@ -424,7 +471,7 @@
             startGame();
             gameStarted = true;
         }
-        
+
         // Reset game - clear only user selections
         function resetGame() {
             if (!gameStarted) {
@@ -436,10 +483,11 @@
             cells.forEach(cell => {
                 cell.classList.remove("zero");
                 cell.classList.remove("one");
+                cell.classList.remove("hint");
                 cell.textContent = "";
             });
         }
-        
+
         // Start game timer and generate puzzle
         function startGame() {
             clearInterval(timer);
@@ -451,61 +499,312 @@
             }, 1000);
             generatePuzzle();
         }
-        
+
         // Update timer display
         function updateTimerDisplay() {
             const minutes = Math.floor(seconds / 60);
             const secs = seconds % 60;
             document.getElementById("timer").innerText = `Time: ${minutes}:${secs.toString().padStart(2, '0')}`;
         }
-        
+
+        // Fisher-Yates shuffle algorithm
+        function shuffleArray(array) {
+            const newArray = [...array]; // Create a copy to avoid modifying the original
+            for (let i = newArray.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+            }
+            return newArray;
+        }
+
         // Generate a valid binary sudoku solution
         function generateValidBinarySudoku(size) {
-            // Create an array to hold our solution
-            let solution = [];
+            // For binary sudoku with unique solution, we need to ensure:
+            // 1. Equal number of 0s and 1s in each row and column
+            // 2. No three consecutive same digits horizontally or vertically
+            // 3. No duplicate rows or columns
             
-            // Initialize with proper alternating rows to ensure rules are followed
-            for (let i = 0; i < size; i++) {
-                solution[i] = [];
+            let solution = [];
+            const half = size / 2;
+            
+            // Create initial pattern for first row - equal number of 0s and 1s
+            let firstRow = Array(size).fill().map((_, i) => i < half ? 0 : 1);
+            firstRow = shuffleArray(firstRow);
+            solution.push(firstRow);
+            
+            // Utility function to check if arrays are equal
+            function arraysEqual(a, b) {
+                if (a === b) return true;
+                if (a == null || b == null) return false;
+                if (a.length !== b.length) return false;
                 
-                // For even-sized grids, we need to ensure equal number of 0s and 1s
-                // and no more than 2 consecutive same numbers
-                if (i % 2 === 0) {
-                    // Even rows start with 0
-                    let val = 0;
-                    for (let j = 0; j < size; j++) {
-                        solution[i][j] = val;
-                        val = 1 - val; // Toggle between 0 and 1
-                    }
-                } else {
-                    // Odd rows start with 1
-                    let val = 1;
-                    for (let j = 0; j < size; j++) {
-                        solution[i][j] = val;
-                        val = 1 - val; // Toggle between 0 and 1
-                    }
+                for (let i = 0; i < a.length; i++) {
+                    if (a[i] !== b[i]) return false;
                 }
+                return true;
             }
             
-            // For grids 6x6 and larger, we need to ensure rows and columns are unique
-            // by doing some row swaps while maintaining the rules
-            if (size >= 6) {
-                // Swap some rows to ensure uniqueness while maintaining validity
-                for (let i = 2; i < size; i += 4) {
-                    if (i + 1 < size) {
-                        // Swap segments within rows to create variation
-                        for (let j = 0; j < size / 2; j++) {
-                            let temp = solution[i][j];
-                            solution[i][j] = solution[i][j + size/2];
-                            solution[i][j + size/2] = temp;
+            // Use backtracking to fill the rest of the grid
+            function isValid(row, col, num) {
+                // Check horizontal consecutive digits
+                if (col >= 2 && solution[row][col-1] === num && solution[row][col-2] === num) {
+                    return false;
+                }
+                
+                // Check vertical consecutive digits
+                if (row >= 2 && solution[row-1][col] === num && solution[row-2][col] === num) {
+                    return false;
+                }
+                
+                // Count number of num in current row
+                let rowCount = 0;
+                for (let c = 0; c < col; c++) {
+                    if (solution[row][c] === num) rowCount++;
+                }
+                if (rowCount >= half) return false;
+                
+                // Count number of num in current column
+                let colCount = 0;
+                for (let r = 0; r < row; r++) {
+                    if (solution[r][col] === num) colCount++;
+                }
+                if (colCount >= half) return false;
+                
+                // Only check for duplicate rows if we're at the end of a row
+                if (col === size - 1 && row > 0) {
+                    for (let r = 0; r < row; r++) {
+                        if (arraysEqual(solution[r], solution[row])) {
+                            return false;
                         }
                     }
                 }
+                
+                // Check for duplicate columns only if we're at the last row
+                if (row === size - 1 && col > 0) {
+                    let currentCol = [];
+                    for (let r = 0; r < size; r++) {
+                        currentCol.push(solution[r][col]);
+                    }
+                    
+                    for (let c = 0; c < col; c++) {
+                        let compareCol = [];
+                        for (let r = 0; r < size; r++) {
+                            compareCol.push(solution[r][c]);
+                        }
+                        
+                        if (arraysEqual(currentCol, compareCol)) {
+                            return false;
+                        }
+                    }
+                }
+                
+                return true;
             }
+            
+            function solve(row, col) {
+                // If we filled the entire grid, we're done
+                if (row === size) {
+                    return true;
+                }
+                
+                // Move to next cell position
+                let nextRow = col === size - 1 ? row + 1 : row;
+                let nextCol = col === size - 1 ? 0 : col + 1;
+                
+                // Try placing 0 and 1
+                for (let num of shuffleArray([0, 1])) {
+                    solution[row][col] = num;
+                    
+                    if (isValid(row, col, num)) {
+                        if (solve(nextRow, nextCol)) {
+                            return true;
+                        }
+                    }
+                    
+                    // Backtrack
+                    solution[row][col] = null;
+                }
+                
+                return false;
+            }
+            
+            // Initialize the grid with null values
+            for (let i = 1; i < size; i++) {
+                solution.push(Array(size).fill(null));
+            }
+            
+            // Start solving from second row
+            solve(1, 0);
             
             return solution;
         }
-        
+
+        // Create copy of a 2D array
+        function copy2DArray(array) {
+            return array.map(row => [...row]);
+        }
+
+        // Check if a puzzle has a unique solution
+        function checkUniqueSolution(grid, prefilled, size) {
+            let tempGrid = copy2DArray(grid);
+            
+            // Create a mask of which cells are empty (not prefilled)
+            let emptyCells = [];
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (!prefilled[i][j]) {
+                        emptyCells.push([i, j]);
+                        tempGrid[i][j] = null; // Clear non-prefilled cells
+                    }
+                }
+            }
+            
+            let solutions = [];
+            
+            // Function to solve grid
+            function solve(index) {
+                if (index >= emptyCells.length) {
+                    // Found a solution, store it
+                    solutions.push(copy2DArray(tempGrid));
+                    return solutions.length < 2; // Stop if we found multiple solutions
+                }
+                
+                const [row, col] = emptyCells[index];
+                
+                for (const val of [0, 1]) {
+                    tempGrid[row][col] = val;
+                    
+                    if (isValidPlacement(tempGrid, row, col, size)) {
+                        if (!solve(index + 1)) {
+                            return false; // Multiple solutions found
+                        }
+                    }
+                    
+                    // If we already found multiple solutions, no need to continue
+                    if (solutions.length >= 2) {
+                        return false;
+                    }
+                }
+                
+                tempGrid[row][col] = null; // Backtrack
+                return true;
+            }
+            
+            // Check if placing a value is valid according to binary sudoku rules
+            function isValidPlacement(grid, row, col, size) {
+                const value = grid[row][col];
+                
+                // Check for three in a row horizontally
+                if (col >= 2 && 
+                    grid[row][col-1] === value && 
+                    grid[row][col-2] === value) {
+                    return false;
+                }
+                
+                // Check for three in a row horizontally (forward)
+                if (col <= size - 3 && 
+                    grid[row][col+1] === value && 
+                    grid[row][col+2] === value) {
+                    return false;
+                }
+                
+                // Check middle of three
+                if (col > 0 && col < size - 1 && 
+                    grid[row][col-1] === value && 
+                    grid[row][col+1] === value) {
+                    return false;
+                }
+                
+                // Similar checks for vertical
+                if (row >= 2 && 
+                    grid[row-1][col] === value && 
+                    grid[row-2][col] === value) {
+                    return false;
+                }
+                
+                if (row <= size - 3 && 
+                    grid[row+1][col] === value && 
+                    grid[row+2][col] === value) {
+                    return false;
+                }
+                
+                if (row > 0 && row < size - 1 && 
+                    grid[row-1][col] === value && 
+                    grid[row+1][col] === value) {
+                    return false;
+                }
+                
+                // Count numbers in row/column
+                let rowZeros = 0, rowOnes = 0, colZeros = 0, colOnes = 0;
+                
+                for (let i = 0; i < size; i++) {
+                    // Count in row
+                    if (grid[row][i] === 0) rowZeros++;
+                    else if (grid[row][i] === 1) rowOnes++;
+                    
+                    // Count in column
+                    if (grid[i][col] === 0) colZeros++;
+                    else if (grid[i][col] === 1) colOnes++;
+                }
+                
+                // Check if we exceed half size
+                if (rowZeros > size/2 || rowOnes > size/2 || colZeros > size/2 || colOnes > size/2) {
+                    return false;
+                }
+                
+                // More extensive checks for uniqueness could be added here
+                // but they would significantly increase computation time
+                
+                return true;
+            }
+            
+            // Start solving
+            solve(0);
+            
+            // Return true if exactly one solution was found
+            return solutions.length === 1;
+        }
+
+        // Generate a puzzle with a unique solution
+        function generatePuzzleWithUniqueSolution(size) {
+            const solution = generateValidBinarySudoku(size);
+            
+            // Create a fully prefilled grid (all true)
+            const prefilled = Array(size).fill().map(() => Array(size).fill(true));
+            
+            // List all cells in random order
+            let allCells = [];
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    allCells.push([i, j]);
+                }
+            }
+            allCells = shuffleArray(allCells);
+            
+            // Gradually remove cells while maintaining a unique solution
+            // For performance reasons, we'll limit the attempts
+            const maxAttempts = Math.min(size * size, 50); // Limit attempts based on grid size
+            const targetCells = Math.floor(size * size * 0.5); // Try to remove about half the cells
+            let cellsRemoved = 0;
+            
+            for (let i = 0; i < maxAttempts && cellsRemoved < targetCells; i++) {
+                const [row, col] = allCells[i];
+                
+                // Temporarily set this cell as not prefilled
+                prefilled[row][col] = false;
+                
+                // Check if the puzzle still has a unique solution
+                if (checkUniqueSolution(solution, prefilled, size)) {
+                    cellsRemoved++;
+                } else {
+                    // Revert if removing this cell creates multiple solutions
+                    prefilled[row][col] = true;
+                }
+            }
+            
+            return { solution, prefilled };
+        }
+
         // Generate a new puzzle with valid prefilled cells
         function generatePuzzle() {
             if (!gameStarted && !currentSize) {
@@ -526,28 +825,12 @@
             grid.innerHTML = "";
             grid.style.gridTemplateColumns = `repeat(${size}, 60px)`;
             
-            // Create solution matrix first (to ensure valid puzzle)
-            const solution = generateValidBinarySudoku(size);
+            // Generate a puzzle with a unique solution
+            const { solution, prefilled } = generatePuzzleWithUniqueSolution(size);
             
-            // Create a copy of the solution to mark cells for prefill
-            const prefilled = Array(size).fill().map(() => Array(size).fill(false));
-            
-            // Select about 30% of cells to be prefilled
-            // Ensure that the prefilled cells don't violate the rules
-            const cellsToFill = Math.floor(size * size * 0.3);
-            let filledCount = 0;
-            
-            while (filledCount < cellsToFill) {
-                const row = Math.floor(Math.random() * size);
-                const col = Math.floor(Math.random() * size);
-                
-                if (!prefilled[row][col]) {
-                    // Check if filling this cell would violate rules
-                    // For simplicity, we'll just use cells from our valid solution
-                    prefilled[row][col] = true;
-                    filledCount++;
-                }
-            }
+            // Store current solution and prefilled for later use
+            currentSolution = solution;
+            currentPrefilled = prefilled;
             
             // Create grid with prefilled cells
             for (let row = 0; row < size; row++) {
@@ -572,10 +855,12 @@
             
             gameStarted = true;
         }
-        
+
         // Toggle cell between 0, 1, and empty
         function toggleCell(cell) {
             if (cell.classList.contains("locked")) return;
+            
+            cell.classList.remove("hint");
             
             if (cell.classList.contains("zero")) {
                 cell.classList.remove("zero");
@@ -596,14 +881,14 @@
                 }
             }
         }
-        
+
         // Check if the grid is completely filled
         function isGridFilled() {
             const cells = document.querySelectorAll(".cell");
             return Array.from(cells).every(cell => 
                 cell.classList.contains("zero") || cell.classList.contains("one"));
         }
-        
+
         // Check if the grid follows all binary sudoku rules
         function isGridValid() {
             const size = currentSize;
@@ -695,7 +980,7 @@
             
             return true;
         }
-        
+
         // Highlight error with shake animation
         function highlightError() {
             const grid = document.getElementById("sudokuGrid");
@@ -704,7 +989,7 @@
                 grid.classList.remove("error");
             }, 500);
         }
-        
+
         // Show winner message
         function showWinnerMessage() {
             clearInterval(timer);
@@ -721,20 +1006,20 @@
                 `You completed the ${currentSize}x${currentSize} puzzle in ${timeMessage}!`;
             document.getElementById("winner-popup").style.display = "flex";
         }
-        
+
         // Close winner popup
         function closeWinnerPopup() {
             document.getElementById("winner-popup").style.display = "none";
             showSizePopup(); // Offer to play again
         }
-        
+
         // Show generic popup
         function showPopup(title, message) {
             document.getElementById("popup-title").innerText = title;
             document.getElementById("popup-message").innerText = message;
             document.getElementById("popup").style.display = "flex";
         }
-        
+
         // Close generic popup
         function closePopup() {
             document.getElementById("popup").style.display = "none";
